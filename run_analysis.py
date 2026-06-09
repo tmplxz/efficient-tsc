@@ -9,6 +9,7 @@ import pandas as pd
 # plotting
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import plotly.express as px
 from plotly.colors import sample_colorscale, make_colorscale
 
 # statistical testing
@@ -86,6 +87,36 @@ def find_cliques_numpy(adj_matrix: np.ndarray):
             P[v] = False
             X[v] = True
 
+def assign_cliques_to_levels(cliques):
+    """
+    Assign cliques to y-levels such that non-overlapping cliques share the same level.
+    Two cliques can be at the same level if their node indices don't intersect.
+    Returns a dict mapping level (int) to list of cliques.
+    """
+    levels = {}
+    
+    for clq in cliques:
+        clq_set = set(clq)
+        # Find the first available level where this clique doesn't overlap with others
+        level = 0
+        while level in levels:
+            # Check if clq overlaps with any clique at this level
+            overlaps = False
+            for existing_clq in levels[level]:
+                existing_set = set(existing_clq)
+                if clq_set & existing_set:  # intersection is non-empty
+                    overlaps = True
+                    break
+            if not overlaps:
+                break
+            level += 1
+        
+        if level not in levels:
+            levels[level] = []
+        levels[level].append(clq)
+    
+    return levels
+
 def graph_ranks_plotly(avranks, names, p_values, title='Rank', reverse=False, labels=False, x_padding=2):
 
     avranks = np.asarray(avranks, dtype=float)
@@ -97,13 +128,16 @@ def graph_ranks_plotly(avranks, names, p_values, title='Rank', reverse=False, la
     highv = math.ceil(max(avranks))
 
     xmin, xmax, ymax = lowv - x_padding, highv + x_padding, math.ceil(k/2)+1.5
-    row_step = 1.0
+    y0, y_line_off, row_step = -0.2, 0.04, 0.6
     fig = go.Figure()
 
     # ---------- Configure x axis ----------
     fig.update_xaxes(range=[xmax, xmin] if reverse else [xmin, xmax], tickmode="array", tickvals=list(range(lowv - 1, highv + 2)), title=title)
     fig.update_yaxes(range=[-ymax, 0], visible=False)
-    fig.add_shape(type="line", x0=lowv-1, x1=highv+1, y0=0, y1=0, line=dict(width=3))
+    fig.add_shape(type="line", x0=lowv-1, x1=highv+1, y0=y0, y1=y0)
+    for x in range(lowv-1, highv+2):
+        fig.add_shape(type="line", x0=x, x1=x, y0=0, y1=y0-y_line_off)
+
 
     # ---------- Sort by rank ----------
     order = np.argsort(avranks)
@@ -115,8 +149,8 @@ def graph_ranks_plotly(avranks, names, p_values, title='Rank', reverse=False, la
     # RIGHT SIDE
     # ====================================================
     for i in range(half):
-        y, r = - (i + 1) * row_step, avranks[i]
-        fig.add_shape(type="line", x0=r, x1=r, y0=0, y1=y)
+        y, r = - (i + 1) * row_step - row_step, avranks[i]
+        fig.add_shape(type="line", x0=r, x1=r, y0=y0, y1=y-y_line_off)
         fig.add_shape(type="line", x0=r, x1=lowv, y0=y, y1=y)
         fig.add_annotation(x=lowv, y=y, text=f"{names[i]}", showarrow=False, xanchor="left")
         if labels:
@@ -126,8 +160,8 @@ def graph_ranks_plotly(avranks, names, p_values, title='Rank', reverse=False, la
     # LEFT SIDE
     # ====================================================
     for i in range(half, k):
-        y, r = - (k - i) * row_step, avranks[i]
-        fig.add_shape(type="line", x0=r, x1=r, y0=0, y1=y)
+        y, r = - (k - i) * row_step - row_step, avranks[i]
+        fig.add_shape(type="line", x0=r, x1=r, y0=y0, y1=y-y_line_off)
         fig.add_shape(type="line", x0=r, x1=highv, y0=y, y1=y)
         fig.add_annotation(x=highv, y=y, text=f"{names[i]}", showarrow=False, xanchor="right")
         if labels:
@@ -145,20 +179,18 @@ def graph_ranks_plotly(avranks, names, p_values, title='Rank', reverse=False, la
             min_i = min(i, j)
             max_j = max(i, j)
             g_data[min_i, max_j] = 1
-
-    # for sanity check - also compare against NX cliques!
-    import networkx
-    nx_cliques = sorted([ sorted(clq) for clq in networkx.find_cliques(networkx.Graph(g_data)) if len(clq) > 1 ])
     g_sym = ((g_data + g_data.T) > 0).astype(np.int64)
     np_cliques = sorted([ sorted(clq) for clq in find_cliques_numpy(g_sym) if len(clq) > 1 ])
-    assert len(nx_cliques) == len(np_cliques)
-    
-    clique_y = - 0.5
-    for clq in reversed(np_cliques):
-        assert clq in nx_cliques
-        min_idx, max_idx = np.min(clq), np.max(clq)
-        fig.add_shape(type="line", x0=avranks[min_idx], x1=avranks[max_idx], y0=clique_y, y1=clique_y, line=dict(width=5))
-        clique_y -= 0.3
+    # SANITY CHECK - compare against cliques found via networksx!
+    # import networkx
+    # nx_cliques = sorted([ sorted(clq) for clq in networkx.find_cliques(networkx.Graph(g_data)) if len(clq) > 1 ])
+    # assert len(nx_cliques) == len(np_cliques)
+
+    # plot cliques
+    for level, clqs in assign_cliques_to_levels(np_cliques).items():
+        for clq in clqs:
+            min_idx, max_idx = np.min(clq), np.max(clq)
+            fig.add_shape(type="line", x0=avranks[min_idx], x1=avranks[max_idx], y0=y0-row_step-(level*-0.5*row_step), y1=y0-row_step-(level*-0.5*row_step), line=dict(width=5))
 
     fig.update_layout(showlegend=False, xaxis={'side': 'top'}, plot_bgcolor="white")
     return fig
@@ -190,23 +222,35 @@ def get_cov_ellipse(x, y, n_std=2.0, num_points=100):
     
     return ellipse_rotated[0] + np.mean(x), ellipse_rotated[1] + np.mean(y)
 
-def prepare_df(df, average_folds=True):
+def prepare_df(df, average_folds=True, change_modelname=True, report_errors=False):
+    # check for errors
+    if report_errors:
+        for _, row in df[df['status'] == 'FAILED'].iterrows():
+            print(f"ERROR in {row['params.dataset']:<25} fold {row['params.fold']} for model {row['params.model']:<12} with pruning {row['params.prune_rate']:.2f} - error message: {row['tags.error']}")
     df = df[df["status"] == "FINISHED"]
+    # prepare columns and data
     df = df.drop([col for col in df.columns if "params." not in col and "metrics." not in col], axis=1)
     df = df.rename(lambda col: col.replace("metrics.", "").replace("params.", "").replace('architecture', 'environment'), axis=1)
-    df['model'] = df.apply(lambda r: replace_prune_name(r['model'], r['prune_rate']), axis=1) # encode prune info into model name!
+    if change_modelname:
+        df['model'] = df.apply(lambda r: replace_prune_name(r['model'], r['prune_rate']), axis=1) # encode prune info into model name!
     df['environment'] = df['environment'].map(lambda e: f"Intel {re.match(r'.*(i\d-\d*)', e).group(1)}" if 'Intel' in e else e.replace(' GeForce', ''))
-    df = df[df['model'] != 'SFCN'] # drop this baseline from the MONSTER paper
+    df = df[df['model'] != 'SFCN'] # drop this baseline from the MONSTER paper TODO remove?
     df['train_energy_total'] /= 3.6e6 # convert to kWh
     for col in ['bal_acc', 'accuracy', 'weighted_f1', 'macro_f1', 'micro_f1']:
         df[col] *= 100
     if 'task' not in df.columns:
-        df['task'] = 'inference'
+        df['task'] = 'Unknown'
+    for task, task_df in df.groupby('task'):
+        print(f'Number of evaluations found for {task}: {task_df.shape[0]}')
     if average_folds: # average individual runs over dataset folds
         grouped_over_folds = df.groupby(['task', 'dataset', 'environment', 'model', 'batch_size'])
+        for index, row in grouped_over_folds.count().iterrows():
+            if row['train_time_total'] < 5 and index[0] == 'Training':
+                print(f"WARNING: Only found {row['train_time_total']} training results across the five splits for {index} configuration - respective inference results will also be missing!")
         fold_averages = grouped_over_folds.mean(numeric_only=True)
         fold_rest = grouped_over_folds.first().drop(columns=fold_averages.columns)
         df = pd.concat([fold_averages, fold_rest], axis=1).reset_index()
+    df['prune_rate'] = np.round(df['prune_rate'], 2) # averaging over folds can lead to small differences in prune_rate
     return df
 
 def print_init(fname):
@@ -248,36 +292,63 @@ COL_SEL = [COLORS[i] for i in [1, 6, 0, 3, 8, 2, 7, 9, 5, 4, 1]]
 
 if __name__ == '__main__':
 
+    # df = pd.read_csv('tsc_hybrid_0_2026-04-17_12-08-03.csv', index_col=False)
+    # df = prepare_df(df, average_folds=False, change_modelname=False)
+    # for (ds, fold), ds_data in df.groupby(['dataset', 'fold']):
+    #     mod_str = ' - '.join([f'{mod}: {mod_data.shape[0]}' for mod, mod_data in ds_data.groupby('model')])
+    #     print(f'{ds:<30} f{fold} - {ds_data.shape[0]} results across models {mod_str}')
+
+    # df = pd.read_csv('tsc_hybrid_-1_2026-03-31_15-31-24.csv', index_col=False)
+    # df = prepare_df(df)
+    # df['gt_train_energy_total'] /= 3.6e6
+    # df['ene_diff'] = (df['gt_train_energy_total'] - df['train_energy_total']) / df['gt_train_energy_total'] * 100
+    # cols = ['gt_train_energy_total', 'ene_diff']
+    # labels = {col: label for col, label in zip(cols, ['Ground-Truth Training Energy Draw [kWh]', 'CodeCarbon Estimation Error [%]'])}
+    # df['modtype'] = df['model'].map(lambda e: e[3:] if e.startswith('P') else e)
+    # ccol = 'modtype' # 'dataset'
+    # px.scatter(df, x=cols[0], y=cols[1], color=ccol, labels=labels, log_x=True).show()
+
     os.chdir('results')
+
+    # new = prepare_df(pd.read_csv('tsc_hybrid_0_2026-03-20_14-26-42.csv', index_col=False), average_folds=False)
+    # old = prepare_df(pd.read_csv('dev_runs/ts_archive_experiment_-1_2025-12-22_09-58-36.csv', index_col=False), average_folds=False)
+
+    # for (ds, fold), new_res in new[new['model'] == 'Hydra'].groupby(['dataset', 'fold']):
+    #     old_res = old[(old['dataset'] == ds) & (old['fold'] == fold) & (old['model'] == 'Hydra')]
+    #     acc_new = new_res['accuracy'].values[0] if new_res.shape[0] > 0 else np.nan
+    #     acc_old = old_res['accuracy'].values[0] if old_res.shape[0] > 0 else np.nan
+    #     append = '(multiple found)' if new_res.shape[0] > 1 or old_res.shape[0] > 1 else ''
+    #     print(f'{ds:<30} fold {fold}: ACC DIFF {acc_new-acc_old:6.2f}% - {acc_new:5.2f}% vs. old {acc_old:5.2f}% {append}')
 
     LOGS = {
         # hydra quant hydrant
-        'ts_archive_experiment_-1_2025-12-22_09-58-36.csv': 'Training',
-        'tsc_pruned_-1_2026-01-23_16-26-31.csv': 'Inference', # WS028
-        'tsc_pruned_-1_2026-01-30_16-22-23.csv': 'Inference', # WS003
-        'tsc_pruned_0_2026-02-27_14-12-25.csv': 'Inference', # 4090
+        'tsc_hybrid_0_2026-05-19_16-31-21.csv': 'Training', # 4090
+        'tsc_hybrid_0_2026-05-22_05-51-25.csv': 'Inference', # 4090
+        'tsc_hybrid_-1_2026-05-22_15-43-21.csv': 'Inference', # i9
+        'tsc_hybrid_-1_2026-05-22_07-51-40.csv': 'Inference', # i7
         # deep learning
-        'ts_archive_experiment_0_2026-01-05_05-28-55.csv': 'Training',
-        'tsc_deep_-1_2026-02-05_17-53-36.csv': 'Inference', # WS028
-        'tsc_deep_-1_2026-02-11_11-38-10.csv': 'Inference', # WS003
-        'tsc_deep_0_2026-02-28_03-43-10.csv': 'Inference', # 4090
+        'tsc_deep_0_2026-03-29_14-17-17.csv': 'Training', # 4090
+        'tsc_deep_0_2026-04-13_11-44-56.csv': 'Inference', # 4090
+        'tsc_deep_-1_2026-04-11_12-54-24.csv': 'Inference', # i9
+        'tsc_deep_-1_2026-04-10_20-13-02.csv': 'Inference', # i7
     }
 
-    MOD_ORDER = {'P80Quant': 'Quant',
+    MOD_ORDER = {'P80Hydrant': 'Hydrant',
+                 'P80Quant': 'Quant',
                  'P80Hydra': 'Hydra', 
-                 'P80Hydrant': 'Hydrant',
+                 'Hydrant': 'Hydrant',
                  'Quant': 'Quant',
                  'Hydra': 'Hydra',
-                 'Hydrant': 'Hydrant',
-                 'MCDCNN': 'Standard DL',
                  'MLP': 'Standard DL',
+                 'MCDCNN': 'Standard DL',
                  'ResNet': 'Standard DL',
                  'FCN': 'Standard DL',
+                 'ConvTran': 'Special DL',
                  'LSTMFCN': 'Special DL',
-                 'InceptionTime': 'Special DL',
-                 'ConvTran': 'Special DL'}
+                 'InceptionTime': 'Special DL'}
     TYPE_COL = {type: COL_SEL[i] for i, type in enumerate(['Quant', 'Hydra', 'Hydrant', 'Standard DL', 'Special DL'])}
     MOD_COL = {mod: TYPE_COL[type] for mod, type in MOD_ORDER.items()}
+    ACC_COL, ENI_COL, ENT_COL = 'bal_acc', 'energy_per_sample', 'train_energy_total'
 
     # check total amount of energy consumption
     logs = {'dev': [], 'fin': []}
@@ -287,7 +358,7 @@ if __name__ == '__main__':
             logs[which].append(pd.read_csv(fn, index_col=False))
         except:
             pass
-    ene = {key: pd.concat(dfs)[['metrics.infer_energy_total', 'metrics.train_energy_total']].sum().sum() / 3.6e6 for key, dfs in logs.items()}
+    ene = {key: pd.concat(dfs)[[f'metrics.{ENI_COL}', f'metrics.{ENT_COL}']].sum().sum() / 3.6e6 for key, dfs in logs.items()}
     print('\n\nFollowing the calls for transparent and sustainable reporting, we estimate the total ' \
           + f'amount of energy consumed by our evaluations to {ene["dev"]:3.0f}+{ene["fin"]:3.0f}={ene["dev"]+ene["fin"]:3.0f} kWh ' \
           + f'(representing the development and testing efforts as well as final experiment runs).\n\n')
@@ -303,26 +374,28 @@ if __name__ == '__main__':
     df = prepare_df(pd.concat(df))
 
     # split into train and infer, identify ideal batch sizes during inference, combine with training resource consumption
-    df_train = df[df['task'] == 'Training']
+    hyprid_models = [mod for mod in pd.unique(df['model']) if mod.endswith('Hydra') or mod.endswith('Quant') or mod.endswith('Hydrant')]
     df_infer = df[df['task'] == 'Inference']
-    df = pd.concat([data.sort_values('energy_per_sample').iloc[0] for _, data in df_infer.groupby(['dataset', 'environment', 'model'])], axis=1).transpose().reset_index(drop=True)
+    df_abl = df[(df['task'] == 'Training') & (df['model'].isin(hyprid_models))]
+    df_train = df[(df['task'] == 'Training') & (df['model'].isin(MOD_ORDER))]
+    df = pd.concat([data.sort_values(ENI_COL).iloc[0] for _, data in df_infer.groupby(['dataset', 'environment', 'model'])], axis=1).transpose().reset_index(drop=True)
     for idx, r in df.iterrows():
         res = df_train[(df_train['model'] == r['model']) & (df_train['dataset'] == r['dataset'])]
-        for col in ['train_time_total', 'train_energy_total']:
+        for col in ['train_time_total', ENT_COL]:
             if res.shape[0] > 0:
                 assert np.isnan(res[col].std())
                 df.loc[idx,col] = res[col].mean()
             else:
                 df.loc[idx,col] = np.nan
     # limit to datasets with all models evaluated
-    max_res_per_ds = max([data.shape[0] for _, data in df.groupby('dataset')])
-    dim_fields = ['n_samples', 'n_channels', 'length', 'n_labels']
-    ds_dim = {(np.prod(data.iloc[0][dim_fields[:-1]]), ds) for ds, data in df.groupby('dataset') if max_res_per_ds==data.shape[0]}
-    ds_sel = [ds for _, ds in sorted(ds_dim)]
-    df = df[df['dataset'].isin(ds_sel)]
-    df_infer = df_infer[df_infer['dataset'].isin(ds_sel)]
-    print(f'Complete results for N={len(ds_sel)} datasets, with {df.shape[0]} evaluations - \n"' + '" "'.join(ds_sel) + '"')
-    print(" ".join([f"{field} range: {int(df[field].min())}--{int(df[field].max())}" for field in dim_fields]))
+    # max_res_per_ds = max([data.shape[0] for _, data in df.groupby('dataset')])
+    # dim_fields = ['n_samples', 'n_channels', 'length', 'n_labels']
+    # ds_dim = {(np.prod(data.iloc[0][dim_fields[:-1]]), ds) for ds, data in df.groupby('dataset') if max_res_per_ds==data.shape[0]}
+    # ds_sel = [ds for _, ds in sorted(ds_dim)]
+    # df = df[df['dataset'].isin(ds_sel)]
+    # df_infer = df_infer[df_infer['dataset'].isin(ds_sel)]q
+    print(f'Complete results for N={pd.unique(df["dataset"]).shape[0]} datasets, with {df.shape[0]} evaluations')
+    print(" ".join([f"{field} range: {int(df[field].min())}--{int(df[field].max())}" for field in ['n_samples', 'n_channels', 'length', 'n_labels']]))
     # index-scale the results (both for all models and only for the hybrid variants)
     scaled_results = scale_and_rate(df, meta)
     scaled_df, _, _, _, _, _ = scaled_results
@@ -330,12 +403,7 @@ if __name__ == '__main__':
     hybrid_df, _, _, _, _, _ = scale_and_rate(hybrid_df, meta)
     meta['properties']['compound'] = {'name': 'Compound Score', 'unit': 'compound'}
     meta['properties']['compound_index'] = {'name': 'Compound Score', 'unit': 'compound'}
-    meta['properties']['train_energy_total'] = {'name': 'Training Energy Draw', 'unit': 'kilowatthours'}
-    # load and scale ablation results, print summary statistics
-    abl_df = prepare_df(pd.read_csv('tsc_pruned_-1_2026-02-11_10-49-39.csv', index_col=False))
-    abl_df = abl_df[abl_df['dataset'].isin(ds_sel)]
-    print('TOTAL TRAINED MODELS: ', (abl_df.shape[0] + df_train.shape[0]) * 5) # for five folds, already averaged
-    print('TOTAL EVALUATED MODELS: ', (abl_df.shape[0] + df_infer.shape[0]) * 5) # for five folds, already averaged
+    # meta['properties'][ENT_COL] = {'name': 'Training Energy Draw', 'unit': 'kilowatthours'}
 
     fname = print_init('colormap') ###############################################################################
     fig = go.Figure()
@@ -345,23 +413,26 @@ if __name__ == '__main__':
     finalize(fig, fname)
 
     fname = print_init('config_impact') ###############################################################################
-    fig = make_subplots(rows=1, cols=3, shared_yaxes=True, horizontal_spacing=0.015)
-    x_labels = {'Older CPU Impact on Energy [%]': [65, 165], 'GPU Impact on Energy [%]': [-5, 405], 'Batch Sizing Impact on Energy [%]': [95, 205]}
+    fig = make_subplots(rows=1, cols=4, shared_yaxes=True, horizontal_spacing=0.012)
+    x_labels = {'Old CPU Energy Impact [%]': [25, 140], 'Old CPU Runtime Impact [%]': [60, 800], 'GPU Energy Impact [%]': [-3, 420], 'Batch Sizing Energy Impact [%]': [97, 160]}
     legend = set()
     for m_idx, (mod, m_type) in enumerate(MOD_ORDER.items()):
         c = TYPE_COL[m_type]
-        # col 1 & 2 - hardware impact (optimal batch size)
-        ene_i9 = df[(df['model'] == mod) & (df['environment'] == 'Intel i9-13900')].sort_values('dataset')['energy_per_sample']
-        ene_i7 = df[(df['model'] == mod) & (df['environment'] == 'Intel i7-6700')].sort_values('dataset')['energy_per_sample']
-        ene_gpu = df[(df['model'] == mod) & (df['environment'] == 'NVIDIA RTX 4090')].sort_values('dataset')['energy_per_sample']
+        # col 1 & 2 - hardware impacts (with optimal batch size)
+        ene_i9 = df[(df['model'] == mod) & (df['environment'] == 'Intel i9-13900')].sort_values('dataset')[ENI_COL]
+        ene_i7 = df[(df['model'] == mod) & (df['environment'] == 'Intel i7-6700')].sort_values('dataset')[ENI_COL]
         x1 = ene_i7.values / ene_i9.values * 100
-        x2 = ene_gpu.values / ene_i9.values * 100
+        time_i9 = df[(df['model'] == mod) & (df['environment'] == 'Intel i9-13900')].sort_values('dataset')['time_per_sample']
+        time_i7 = df[(df['model'] == mod) & (df['environment'] == 'Intel i7-6700')].sort_values('dataset')['time_per_sample']
+        x2 = time_i7.values / time_i9.values * 100
+        ene_gpu = df[(df['model'] == mod) & (df['environment'] == 'NVIDIA RTX 4090')].sort_values('dataset')[ENI_COL]
+        x3 = ene_gpu.values / ene_i9.values * 100
         # col 3 - batch sizing impact across all envs
-        x3 = []
-        for _, ds_env_mod_data in df_infer[df_infer['model'] == mod].sort_values('energy_per_sample').groupby(['dataset', 'environment']):
-            x3.append(ds_env_mod_data['energy_per_sample'].iloc[1:].values / ds_env_mod_data['energy_per_sample'].iloc[0] * 100)
-        x3 = np.concat(x3)
-        for c_idx, x in enumerate([x1, x2, x3]):
+        x4 = []
+        for _, ds_env_mod_data in df_infer[df_infer['model'] == mod].sort_values(ENI_COL).groupby(['dataset', 'environment']):
+            x4.append(ds_env_mod_data[ENI_COL].iloc[1:].values / ds_env_mod_data[ENI_COL].iloc[0] * 100)
+        x4 = np.concat(x4)
+        for c_idx, x in enumerate([x1, x2, x3, x4]):
             fig.add_trace(go.Box(x=x, y=[mod]*x.shape[0], marker_color=c, orientation="h", name=m_type, showlegend=m_type not in legend), row=1, col=1+c_idx)
             legend.add(m_type)
     for c_idx, (x_label, minmax) in enumerate(x_labels.items()):
@@ -371,11 +442,11 @@ if __name__ == '__main__':
     finalize(fig, fname)
 
     fname = print_init('pruning_ablation') ###############################################################################
-    abl_df['model'] = abl_df['model'].map(lambda e: e[3:] if 'P' in e else e)
+    df_abl['model'] = df_abl['model'].map(lambda e: e[3:] if 'P' in e else e)
     fig = make_subplots(rows=1, cols=2, shared_yaxes=True, horizontal_spacing=0.02)
-    cols = {'bal_acc': [100.5, 87], 'energy_per_sample': [102, 15]}
+    cols = {ACC_COL: [100.5, 87], ENI_COL: [102, 15]}
     for mod in ['Quant', 'Hydra', 'Hydrant']:
-        mod_data = abl_df[abl_df['model'] == mod]
+        mod_data = df_abl[df_abl['model'] == mod]
         res = {col: {} for col in cols}
         mc = MOD_COL[mod]
         omc = hex_to_alpha(mc, 0.15)
@@ -400,27 +471,32 @@ if __name__ == '__main__':
     finalize(fig, fname)
 
     fname = print_init('pareto_performance') ###############################################################################
-    fig = make_subplots(rows=1, cols=2, shared_yaxes=True, horizontal_spacing=0.02)
-    displ, ycol, xcol = set(), 'bal_acc', 'energy_per_sample'
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.02)
+    done_dl, displ = set(), set()
     for mod, mtype in MOD_ORDER.items():
         col = TYPE_COL[mtype]
-        for c_idx, env in enumerate(['Intel i9-13900', 'NVIDIA RTX 4090']):
+        if mtype == 'Standard DL' or mtype == 'Special DL': # only display first model from each example
+            if mtype in done_dl:
+                continue
+            done_dl.add(mtype)
+            mtype = mod
+        for r_idx, env in enumerate(['Intel i9-13900', 'NVIDIA RTX 4090']):
             mod_data = scaled_df[(scaled_df['model'] == mod) & (scaled_df['environment'] == env)]
-            x, y = mod_data[f'{xcol}_index'].values, mod_data[f'{ycol}_index'].values
-            fig.add_trace(go.Scatter(x=[np.mean(x)], y=[np.mean(y)], text=[mod], name=mtype, legendgroup=mtype, mode='markers+text', textposition="bottom center", textfont={'color': col}, marker={'color': col}, showlegend=mtype not in displ), row=1, col=c_idx+1)
+            x, y = mod_data[f'{ENI_COL}_index'].values, mod_data[f'{ACC_COL}_index'].values
+            fig.add_trace(go.Scatter(x=[np.mean(x)], y=[np.mean(y)], text=[mod], name=mtype, legendgroup=mtype, mode='markers+text', textposition="bottom center", textfont={'color': col}, marker={'color': col}, showlegend=False), row=1+r_idx, col=1)
             ex, ey = get_cov_ellipse(x, y, n_std=1.177) # 50% coverage
-            fig.add_trace(go.Scatter(x=ex, y=ey, mode='lines', line=dict(color=col), legendgroup=mtype, showlegend=False, opacity=0.5), row=1, col=c_idx+1)
+            fig.add_trace(go.Scatter(x=ex, y=ey, mode='lines', line=dict(color=col), legendgroup=mtype, showlegend=False, opacity=0.5), row=1+r_idx, col=1)
             displ.add(mtype)
-            fig.update_xaxes(title=f"Relative {FMT(xcol).split(' [')[0]} on {env}", range=[0, 1.02], row=1, col=c_idx+1)
-    for col in [1, 2]:
-        fig.add_layout_image(source=GRAD, xref="x domain", yref="y domain", x=1, y=1, xanchor="right", yanchor="top", sizex=1.0, sizey=1.0, sizing="stretch", opacity=0.3, layer="below", row=1, col=col)
-    fig.update_yaxes(title=f"Relative {FMT(ycol).split(' [')[0]}", range=[0.55, 1.02], row=1, col=1)
-    fig.update_layout(legend=dict(yanchor="bottom", y=0, xanchor="center", x=0.5, orientation='h'))
-    finalize(fig, fname)
+            fig.add_annotation(x=1, y=0.63, showarrow=False, text=f"Inference on {env}", xanchor="right", row=1+r_idx, col=1)
+            fig.update_yaxes(title=f"Relative {FMT(ACC_COL).split(' [')[0]}", range=[0.6, 1.02], row=r_idx+1, col=1)
+    for row in [1, 2]:
+        fig.add_layout_image(source=GRAD, xref="x domain", yref="y domain", x=1, y=1, xanchor="right", yanchor="top", sizex=1.0, sizey=1.0, sizing="stretch", opacity=0.3, layer="below", row=row, col=1)
+    fig.update_xaxes(title=f"Relative {FMT(ENI_COL).split(' [')[0]}", range=[0, 1.02], row=2, col=1)
+    finalize(fig, fname, ws=0.5, hs=1.5)
 
     fname = print_init('model_stats') ###############################################################################
     fig = make_subplots(rows=1, cols=4, shared_yaxes=True, horizontal_spacing=0.01)
-    cols = ['bal_acc', 'energy_per_sample', 'train_energy_total', 'compound_index']
+    cols = [ACC_COL, ENI_COL, ENT_COL, 'compound_index']
     col_min_max = {col: [np.inf, 0] for col in cols}
     legend = set()
     for m_idx, (mod, m_type) in enumerate(MOD_ORDER.items()):
@@ -434,25 +510,26 @@ if __name__ == '__main__':
             col_min_max[col][1] = max(col_min_max[col][1], q3)
     for c_idx, col in enumerate(cols):
         type, minmax = 'linear', col_min_max[col]
-        if col in ['energy_per_sample', 'train_energy_total']:
+        if col in [ENI_COL, ENT_COL]:
             type = 'log'
             minmax = [np.log10(minmax[0]), np.log10(minmax[1])]
-        fig.update_xaxes(title=FMT(col), range=minmax, type=type, row=1, col=1+c_idx)
+        fig.update_xaxes(title=FMT(col).replace(' Efficiency', ''), range=minmax, type=type, row=1, col=1+c_idx)
     fig.update_layout(legend=dict(yanchor="bottom", y=1, xanchor="center", x=0.5, orientation='h'))
     finalize(fig, fname)
 
     # statistical significance checks
-    for column in ['bal_acc', 'energy_per_sample', 'compound']:
+    for column in ['bal_acc', ENI_COL, 'compound']:
         fname = print_init(f'cd_{column}') ###############################################################################
         rel_columns = [hybrid_df['model'], hybrid_df['dataset'] + hybrid_df['environment'], hybrid_df[f'{column}_index']]
         stat_df = pd.concat(rel_columns, axis=1).rename({0: 'configuration'}, axis=1)
         p_values, average_ranks, _ = wilcoxon_holm(stat_df)
         fig = graph_ranks_plotly(average_ranks.values, average_ranks.keys(), p_values, title=f'{FMT(column).split(" [")[0]} Rank', reverse=True)
         finalize(fig, fname, ws=.33, hs=.5)
-        # comparison with cd diagram implementation by hfawaz (with minor adjustments) - https://github.com/hfawaz/cd-diagram
-        # from cd import draw_cd_diagram
-        # draw_cd_diagram(stat_df, title=f'{FMT(column).split(" [")[0]} Rank', fname=fname)
-    
+        # comparison with CD diagram implementation by hfawaz - download and rename main.py from https://github.com/hfawaz/cd-diagram
+        # from cd_hfawaz import draw_cd_diagram
+        # stats = stat_df.rename({'model': 'classifier_name', f'{column}_index': 'accuracy', 'configuration': 'dataset_name'})
+        # draw_cd_diagram(stats, axis=1), title=f'{FMT(column).split(" [")[0]} Rank')
+
     # start the interactive exploration tool
     app = Visualization(scaled_results)
     app.run()

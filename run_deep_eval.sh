@@ -20,7 +20,7 @@ do
             for f in "0" "1" "2" "3" "4"
             do
                 echo "Running model $m on GPU $1 on DS $d for fold $f ..."
-                timeout 14400 mlflow run --experiment-name=$exp_name -e main.py -P gpu=$1 -P cache_dir=$2 -P use_pretrained=$4 -P dataset=$d -P model=$m -P fold=$f -P batch_size=$bs -P seed=-1 ./ts_archive_experiments
+                mlflow run --experiment-name=$exp_name -e main.py -P gpu=$1 -P cache_dir=$2 -P use_pretrained=$4 -P dataset=$d -P model=$m -P fold=$f -P batch_size=$bs -P seed=-1 ./tsc
             done
         done
         # Save experiment data to CSV
